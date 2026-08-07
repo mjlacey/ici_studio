@@ -1,0 +1,6 @@
+[build]
+  command = "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable && source $HOME/.cargo/env && rustup target add wasm32-unknown-unknown && curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh && wasm-pack build wasm --target web --release --out-dir ../web/src/wasm/pkg && cd web && npm ci && npm run build"
+  publish = "web/dist"
+
+[build.environment]
+  NODE_VERSION = "20"

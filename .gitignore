@@ -1,0 +1,9 @@
+target/
+node_modules/
+web/dist/
+web/src/wasm/pkg/
+data/
+ici_analysis.R
+
+.DS_Store
+.claude/
