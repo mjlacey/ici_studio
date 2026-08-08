@@ -310,6 +310,13 @@ page/JS/WASM files sees the same basic access logs (IP, requested paths,
 timestamps) any web host does for any page load — that's unrelated to,
 and doesn't include, anything about the files you subsequently analyse.
 
+The production deployment (`ici-studio.lacey.se`) also loads Google
+Analytics for basic page-view stats (visits, referrers, rough
+geography) — a page-shell script declared in `index.html`, gated to that
+exact hostname so a fork, a local dev server, or a Netlify preview URL
+never reports traffic against it. It has no visibility into anything the
+analysis pipeline does; it only ever sees "someone loaded the page."
+
 ---
 
 ## Development

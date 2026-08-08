@@ -4,6 +4,24 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>ICI Studio</title>
+    <!-- Google tag (gtag.js) -- page-view analytics only, gated to the
+         production hostname so a fork/dev-server/Netlify-preview never
+         reports traffic against this measurement ID. Analysis code never
+         touches this; it's a page-shell concern, not a worker/WASM one. -->
+    <script>
+      if (window.location.hostname === "ici-studio.lacey.se") {
+        var gaScript = document.createElement("script");
+        gaScript.async = true;
+        gaScript.src = "https://www.googletagmanager.com/gtag/js?id=G-YK682R46HV";
+        document.head.appendChild(gaScript);
+        window.dataLayer = window.dataLayer || [];
+        function gtag() {
+          dataLayer.push(arguments);
+        }
+        gtag("js", new Date());
+        gtag("config", "G-YK682R46HV");
+      }
+    </script>
   </head>
   <body>
     <div id="app"></div>
