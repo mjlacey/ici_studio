@@ -5,6 +5,7 @@
 
 import { applyConfigImport, buildConfigExport } from "../export/config";
 import { downloadJson, downloadText } from "../export/download";
+import { buildPocvTsv, pocvGroupOptions } from "../export/pocv";
 import { buildRunReport } from "../export/run-report";
 import { buildAnalysisTsv, defaultTsvOptions, type TsvOptions } from "../export/tsv";
 import { activeDataset, store, updateDataset } from "../state";
@@ -12,6 +13,7 @@ import type { Dataset } from "../types";
 import type { DataWorkerClient } from "../worker/client";
 
 let tsvOptions = defaultTsvOptions();
+let pocvGroupKey: string | null = null;
 
 export function mountExportPanel(container: HTMLElement, worker: DataWorkerClient): void {
   let statusMessage = "";
@@ -34,6 +36,10 @@ export function mountExportPanel(container: HTMLElement, worker: DataWorkerClien
 
 function renderPanel(container: HTMLElement, dataset: Dataset, worker: DataWorkerClient, statusMessage: string, setStatus: (msg: string) => void): void {
   const hasResult = !!dataset.stageAResult;
+  const pocvOptions = pocvGroupOptions(dataset);
+  if (!pocvGroupKey || !pocvOptions.some((o) => o.key === pocvGroupKey)) {
+    pocvGroupKey = pocvOptions[0]?.key ?? null;
+  }
 
   container.innerHTML = `
     <section class="panel">
@@ -78,6 +84,33 @@ function renderPanel(container: HTMLElement, dataset: Dataset, worker: DataWorke
       <button type="button" class="btn" id="download-run-report" ${hasResult ? "" : "disabled"}>Download run report (JSON)</button>
       ${!hasResult ? `<p class="hint">Run Stage A first.</p>` : ""}
 
+      <details class="overrides">
+        <summary>Advanced</summary>
+        <h3>Export charge/discharge pOCV</h3>
+        <table class="mapping-table">
+          <tbody>
+            <tr>
+              <th>Half-cycle</th>
+              <td>
+                <select data-pocv-group ${pocvOptions.length ? "" : "disabled"}>
+                  ${pocvOptions
+                    .map((o) => `<option value="${escapeHtml(o.key)}" ${o.key === pocvGroupKey ? "selected" : ""}>${escapeHtml(o.label)} (${o.n} pts)</option>`)
+                    .join("")}
+                </select>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <button type="button" class="btn-small" id="download-pocv" ${pocvOptions.length ? "" : "disabled"}>Export charge/discharge pOCV</button>
+        ${
+          !dataset.stageBResult
+            ? `<p class="hint">Run Stage B ("Smooth &amp; derive") first.</p>`
+            : pocvOptions.length === 0
+              ? `<p class="hint">No smoothed points available to export.</p>`
+              : `<p class="hint">Two columns only — Q and the smoothed E0 curve, renamed "E" — for the selected half-cycle only, for direct import into external pOCV tooling.</p>`
+        }
+      </details>
+
       ${statusMessage ? `<p class="info-note">${escapeHtml(statusMessage)}</p>` : ""}
     </section>
   `;
@@ -114,6 +147,20 @@ function renderPanel(container: HTMLElement, dataset: Dataset, worker: DataWorke
     const report = buildRunReport(dataset, store.get().analysisConfig);
     downloadJson(report, `${dataset.filename}_run-report.json`);
   });
+
+  container.querySelector<HTMLSelectElement>("[data-pocv-group]")?.addEventListener("change", (e) => {
+    pocvGroupKey = (e.target as HTMLSelectElement).value;
+  });
+  container.querySelector<HTMLButtonElement>("#download-pocv")?.addEventListener("click", () => {
+    if (!pocvGroupKey) return;
+    const tsv = buildPocvTsv(dataset, pocvGroupKey);
+    const label = pocvOptions.find((o) => o.key === pocvGroupKey)?.label ?? "export";
+    downloadText(tsv, `${dataset.filename}_pOCV_${sanitizeFilenamePart(label)}.txt`, "text/tab-separated-values;charset=utf-8");
+  });
+}
+
+function sanitizeFilenamePart(s: string): string {
+  return s.replace(/[^a-z0-9]+/gi, "_").replace(/^_+|_+$/g, "");
 }
 
 async function downloadTsv(dataset: Dataset, worker: DataWorkerClient, options: TsvOptions, filename: string): Promise<void> {
