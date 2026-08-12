@@ -127,9 +127,13 @@ export interface StageAConfig {
   edgePoints: number;
   dropUnrestedReversals: boolean;
   legacyCompatibility: boolean;
+  /** Drops rows outside "the ICI cycle" itself (a capacity-check cycle, an OCV rest, a DCIR leg, ...) during segmentation -- before Q anchoring and Stage A ever see them, not just hidden afterward (`core::segment::IciDetectionConfig`). */
+  nonIciDetectionEnabled: boolean;
+  nonIciMaxRestDurationS: number;
+  nonIciMinRepeatCount: number;
 }
 
-/** R's own defaults (§7). */
+/** R's own defaults (§7), plus this port's own ICI-cycle-detection defaults. */
 export function defaultStageAConfig(): StageAConfig {
   return {
     stateThreshold: 0,
@@ -138,6 +142,9 @@ export function defaultStageAConfig(): StageAConfig {
     edgePoints: 3,
     dropUnrestedReversals: true,
     legacyCompatibility: false,
+    nonIciDetectionEnabled: true,
+    nonIciMaxRestDurationS: 300,
+    nonIciMinRepeatCount: 20,
   };
 }
 
@@ -564,6 +571,8 @@ export interface SegmentationSummary {
   leadingRestRowsDropped: number;
   /** §7.1: non-empty when a group has no rests or no active samples at the current threshold. */
   thresholdSuggestions: ThresholdSuggestion[];
+  /** Rows dropped by `StageAConfig`'s ICI-cycle detection -- outside "the ICI cycle" itself (a capacity-check cycle, an OCV rest, a DCIR leg, ...). */
+  nonIciRowsDropped: number;
 }
 
 /** Mirrors wasm's `GroupKeyColumnsDto` (§12.1's TSV export needs each row's actual grouping-column string values, not just the synthetic `groupId` int). Keyed by `groupId` as a string. */

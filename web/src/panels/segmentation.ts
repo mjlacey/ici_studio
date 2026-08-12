@@ -21,6 +21,9 @@ function segmentationKey(dataset: Dataset, qAnchoring: AnalysisConfig["qAnchorin
     groupingColumns: dataset.groupingColumns,
     stateThreshold: dataset.stageAConfig.stateThreshold,
     dropUnrestedReversals: dataset.stageAConfig.dropUnrestedReversals,
+    nonIciDetectionEnabled: dataset.stageAConfig.nonIciDetectionEnabled,
+    nonIciMaxRestDurationS: dataset.stageAConfig.nonIciMaxRestDurationS,
+    nonIciMinRepeatCount: dataset.stageAConfig.nonIciMinRepeatCount,
     qAnchoring,
   });
 }
@@ -40,6 +43,9 @@ export function segmentationInputFor(dataset: Dataset, qAnchoring: AnalysisConfi
     groupingColumns,
     stateThreshold: stageAConfig.stateThreshold,
     dropUnrestedReversals: stageAConfig.dropUnrestedReversals,
+    nonIciDetectionEnabled: stageAConfig.nonIciDetectionEnabled,
+    nonIciMaxRestDurationS: stageAConfig.nonIciMaxRestDurationS,
+    nonIciMinRepeatCount: stageAConfig.nonIciMinRepeatCount,
     chargeAnchor: qAnchoring.charge,
     dischargeAnchor: qAnchoring.discharge,
   };

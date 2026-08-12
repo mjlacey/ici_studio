@@ -19,6 +19,7 @@ import { errorBarPlugin, type ErrorBarPoint } from "./error-bar-plugin";
 import { naturalOrderPathBuilder } from "./natural-order-path";
 import { PLOT_COLUMNS } from "./plot-columns";
 import { pngExportControlHtml, wirePngExportControl } from "./png-export";
+import { chartGridColor, chartTextColor, onThemeChange } from "../theme";
 
 const SERIES_COLOR = "#2563eb";
 const GROUP_PALETTE = ["#2563eb", "#f97316", "#16a34a", "#7c3aed", "#0891b2", "#ea580c", "#db2777", "#65a30d"];
@@ -260,7 +261,10 @@ export function mountAdditionalPlot(container: HTMLElement, plotId: string, call
       width: host.clientWidth || 800,
       height: 260,
       scales: { x: { time: false, distr: xRange.log ? 3 : 1 }, y: { distr: yRange.log ? 3 : 1 } },
-      axes: [{ label: xLabel }, { label: yLabel }],
+      axes: [
+        { label: xLabel, stroke: chartTextColor, grid: { stroke: chartGridColor }, ticks: { stroke: chartGridColor } },
+        { label: yLabel, stroke: chartTextColor, grid: { stroke: chartGridColor }, ticks: { stroke: chartGridColor } },
+      ],
       series,
       plugins: cfg.errorColumn ? [errorBarPlugin({ getEnabled: () => true, getMinPx: () => 2, getPoints: () => errorPoints })] : [],
     };
@@ -298,10 +302,12 @@ export function mountAdditionalPlot(container: HTMLElement, plotId: string, call
 
   const unsubscribe = store.subscribe(render);
   render();
+  const unsubscribeTheme = onThemeChange(() => chart?.redraw(true, true));
 
   return {
     destroy: () => {
       unsubscribe();
+      unsubscribeTheme();
       chart?.destroy();
       wrapper.remove();
     },

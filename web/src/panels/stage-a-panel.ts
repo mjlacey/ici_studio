@@ -56,6 +56,17 @@ function renderPanel(container: HTMLElement, dataset: Dataset, worker: DataWorke
           <label><input type="checkbox" data-field="dropUnrestedReversals" ${cfg.dropUnrestedReversals ? "checked" : ""} /> Drop unrested reversals</label>
           <label><input type="checkbox" data-field="legacyCompatibility" ${cfg.legacyCompatibility ? "checked" : ""} /> Legacy compatibility (I = mean of all active samples)</label>
         </div>
+        <h3>ICI cycle detection</h3>
+        <div class="override-grid">
+          <label><input type="checkbox" data-field="nonIciDetectionEnabled" ${cfg.nonIciDetectionEnabled ? "checked" : ""} /> Exclude non-ICI rests</label>
+        </div>
+        <table class="mapping-table">
+          <tbody>
+            <tr><th>Rest longer than (s)</th><td><input type="number" min="1" step="1" data-field="nonIciMaxRestDurationS" value="${cfg.nonIciMaxRestDurationS}" /></td></tr>
+            <tr><th>Min. consecutive pulses</th><td><input type="number" min="1" step="1" data-field="nonIciMinRepeatCount" value="${cfg.nonIciMinRepeatCount}" /></td></tr>
+          </tbody>
+        </table>
+        <p class="hint">A rest longer than this, or part of a run of fewer than this many consecutive short pulses within one cyc.n (e.g. a DCIR leg's own few rests), is dropped during segmentation as outside the ICI cycle -- before Q anchoring and Stage A ever see it.</p>
       </details>
       <button type="button" class="btn" id="fit-btn" ${running ? "disabled" : ""}>${running ? "Fitting…" : "Fit resistances"}</button>
       ${dataset.stageAError ? `<p class="status status-error">${escapeHtml(dataset.stageAError)}</p>` : ""}
@@ -105,6 +116,17 @@ function wireInputs(container: HTMLElement, dataset: Dataset): void {
   container.querySelector<HTMLInputElement>('[data-field="legacyCompatibility"]')?.addEventListener("change", (e) => {
     setField("legacyCompatibility", (e.target as HTMLInputElement).checked);
   });
+  container.querySelector<HTMLInputElement>('[data-field="nonIciDetectionEnabled"]')?.addEventListener("change", (e) => {
+    setField("nonIciDetectionEnabled", (e.target as HTMLInputElement).checked);
+  });
+  container.querySelector<HTMLInputElement>('[data-field="nonIciMaxRestDurationS"]')?.addEventListener("change", (e) => {
+    const v = Math.max(1, Number((e.target as HTMLInputElement).value));
+    if (Number.isFinite(v)) setField("nonIciMaxRestDurationS", v);
+  });
+  container.querySelector<HTMLInputElement>('[data-field="nonIciMinRepeatCount"]')?.addEventListener("change", (e) => {
+    const v = Math.max(1, Math.round(Number((e.target as HTMLInputElement).value)));
+    if (Number.isFinite(v)) setField("nonIciMinRepeatCount", v);
+  });
 }
 
 function renderRunLog(result: StageAResult): string {
@@ -131,10 +153,12 @@ function renderRunLog(result: StageAResult): string {
       : "";
 
   const nonphysicalHtml = nonphysicalNote("R", result.nonphysicalReport.rByState) + nonphysicalNote("k", result.nonphysicalReport.kByState);
+  const nonIciDropped = result.segmentation.nonIciRowsDropped;
 
   return `
     <div class="run-log">
       <p class="hint">${fittedCount} of ${totalRests} rests fitted successfully.</p>
+      ${nonIciDropped > 0 ? `<p class="hint">${nonIciDropped} raw row(s) excluded as outside the detected ICI cycle.</p>` : ""}
       ${failuresHtml}
       ${nonphysicalHtml ? `<ul class="issues">${nonphysicalHtml}</ul>` : ""}
     </div>

@@ -343,6 +343,7 @@ mod tests {
         let config = SegmentConfig {
             state_threshold: 0.0,
             drop_unrested_reversals: false,
+            ..Default::default()
         };
         let (seg, _log) = segment(&group_id, &t, &cyc_n, &current, &voltage, &charge, &config);
 

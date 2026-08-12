@@ -10,6 +10,7 @@
   --text: #1a1f29;
   --text-muted: #667085;
   --accent: #2563eb;
+  --success: #067647;
   --warning-bg: #fff7e6;
   --warning-border: #f0b429;
   --error-bg: #fef2f2;
@@ -17,6 +18,46 @@
   --info-bg: #eff6ff;
   font-family:
     -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+/* Dark palette: applied when the OS/browser prefers dark and there's no
+   explicit override (data-theme absent), or when the user has explicitly
+   picked dark via the header toggle (theme.ts). --bg-header stays the same
+   dark navy in both themes -- it was already dark, so it needs no override. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --border: #2c3341;
+    --border-strong: #454e60;
+    --bg: #1a1f29;
+    --bg-subtle: #12151c;
+    --text: #e6e8ec;
+    --text-muted: #9aa4b2;
+    --accent: #5b8def;
+    --success: #34d399;
+    --warning-bg: #3a2f12;
+    --warning-border: #f0b429;
+    --error-bg: #3a1414;
+    --error-border: #f87171;
+    --info-bg: #172033;
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --border: #2c3341;
+  --border-strong: #454e60;
+  --bg: #1a1f29;
+  --bg-subtle: #12151c;
+  --text: #e6e8ec;
+  --text-muted: #9aa4b2;
+  --accent: #5b8def;
+  --success: #34d399;
+  --warning-bg: #3a2f12;
+  --warning-border: #f0b429;
+  --error-bg: #3a1414;
+  --error-border: #f87171;
+  --info-bg: #172033;
 }
 
 * {
@@ -37,12 +78,38 @@ body {
   padding: 10px 16px;
   font-weight: 600;
   font-size: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
 
 .app-header .hint {
   font-weight: 400;
   color: #cbd5e1;
   font-size: 13px;
+}
+
+.theme-toggle {
+  font: inherit;
+  font-size: 13px;
+  font-weight: 400;
+  color: #cbd5e1;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+
+.theme-toggle:hover {
+  color: white;
+  border-color: rgba(255, 255, 255, 0.4);
+}
+
+/* uPlot's default drag-to-zoom selection rectangle is a flat black tint
+   (.u-select in uPlot.min.css) -- imperceptible against a dark panel. */
+.u-select {
+  background: rgba(37, 99, 235, 0.18) !important;
 }
 
 .app-shell {
@@ -269,7 +336,7 @@ body {
 }
 
 .status-ok {
-  color: #067647;
+  color: var(--success);
 }
 
 .status-error {

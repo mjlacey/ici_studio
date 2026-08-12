@@ -5,11 +5,13 @@
 
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
+import { iciTimeSpan } from "../analysis/ici-region";
 import { activeDataset, store } from "../state";
 import type { DataWorkerClient } from "../worker/client";
 import { applyAxisRange, axisControlsHtml, defaultAxisRange, setAxisInputs, wireAxisControls } from "./axis-controls";
-import { restShadingPlugin, type RestBand } from "./band-plugin";
+import { nonIciShadingPlugin, restShadingPlugin, type RestBand } from "./band-plugin";
 import { pngExportControlHtml, wirePngExportControl } from "./png-export";
+import { chartGridColor, chartTextColor, onThemeChange } from "../theme";
 
 const TARGET_POINTS = 4000;
 
@@ -34,11 +36,13 @@ export function mountPlot1(container: HTMLElement, worker: DataWorkerClient): vo
       ${axisControlsHtml("x", xRange)}
       ${axisControlsHtml("y", yRange)}
     </div>
+    <p class="hint" data-non-ici-hint style="display:none">Shaded in red: outside the detected ICI cycle, excluded from analysis.</p>
     <div class="plot-host"></div>
   `;
   container.appendChild(wrapper);
 
   const host = wrapper.querySelector<HTMLDivElement>(".plot-host")!;
+  const nonIciHint = wrapper.querySelector<HTMLParagraphElement>("[data-non-ici-hint]")!;
   const toggle = wrapper.querySelector<HTMLInputElement>("[data-toggle-current]")!;
   toggle.addEventListener("change", () => {
     showCurrent = toggle.checked;
@@ -78,6 +82,12 @@ export function mountPlot1(container: HTMLElement, worker: DataWorkerClient): vo
     }));
   }
 
+  function iciSpan(): { start: number; end: number } | null {
+    const seg = activeDataset(store.get())?.segmentation;
+    if (!seg) return null;
+    return iciTimeSpan(seg.restBoundaries, seg.nonIciRowsDropped);
+  }
+
   async function redecimate(datasetId: string, xMin: number, xMax: number): Promise<void> {
     const series = await worker.getDecimatedSeries(datasetId, xMin, xMax, TARGET_POINTS);
     if (!series || !chart) return;
@@ -108,7 +118,11 @@ export function mountPlot1(container: HTMLElement, worker: DataWorkerClient): vo
       width,
       height: 300,
       scales: { x: { time: false, distr: xRange.log ? 3 : 1 }, y: { distr: yRange.log ? 3 : 1 }, i: {} },
-      axes: [{ label: "t (s)" }, { label: "E (V)", scale: "y" }, { label: "I (A)", scale: "i", side: 1, grid: { show: false } }],
+      axes: [
+        { label: "t (s)", stroke: chartTextColor, grid: { stroke: chartGridColor }, ticks: { stroke: chartGridColor } },
+        { label: "E (V)", scale: "y", stroke: chartTextColor, grid: { stroke: chartGridColor }, ticks: { stroke: chartGridColor } },
+        { label: "I (A)", scale: "i", side: 1, stroke: chartTextColor, grid: { show: false }, ticks: { stroke: chartGridColor } },
+      ],
       series: [
         { label: "t" },
         { label: "E", stroke: "#2563eb", scale: "y", width: 1.5, points: { show: false } },
@@ -130,7 +144,7 @@ export function mountPlot1(container: HTMLElement, worker: DataWorkerClient): vo
           },
         ],
       },
-      plugins: [restShadingPlugin(bands)],
+      plugins: [nonIciShadingPlugin(iciSpan), restShadingPlugin(bands)],
     };
     return new uPlot(opts, [[], [], []], host);
   }
@@ -161,6 +175,7 @@ export function mountPlot1(container: HTMLElement, worker: DataWorkerClient): vo
       return;
     }
     wrapper.style.display = "";
+    nonIciHint.style.display = iciSpan() ? "" : "none";
     // Reload whenever segmentation was actually recomputed (e.g. the state
     // threshold changed, including via the §7.1 suggestion banner), not just
     // when switching datasets -- otherwise a fix that turns an empty
@@ -177,4 +192,5 @@ export function mountPlot1(container: HTMLElement, worker: DataWorkerClient): vo
 
   store.subscribe(render);
   render();
+  onThemeChange(() => chart?.redraw(true, true));
 }

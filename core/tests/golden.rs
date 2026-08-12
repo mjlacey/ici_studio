@@ -254,6 +254,7 @@ fn full_pipeline_matches_r_reference() {
         let seg_config = SegmentConfig {
             state_threshold,
             drop_unrested_reversals,
+            ..Default::default()
         };
         let (seg, _seg_log) = segment(
             &group_id,

@@ -40,6 +40,48 @@ export function restShadingPlugin(getBands: () => RestBand[]): uPlot.Plugin {
   };
 }
 
+/**
+ * Plot 1: shade whatever falls *outside* the detected ICI cycle (§ non-ICI
+ * region detection, `analysis/ici-region.ts`) -- everything before it
+ * (capacity-check cycles, OCV rests, ...) and everything after it, using
+ * the chart's own currently-loaded x-data for the outer bounds so this
+ * works with Plot 1's re-decimate-on-zoom behaviour without needing to
+ * know the dataset's true full time range in advance. `getIciSpan`
+ * returning `null` (nothing excluded -- either a pure-ICI file, or
+ * segmentation hasn't loaded yet) draws nothing, so this is a no-op for
+ * every file that doesn't need it.
+ */
+export function nonIciShadingPlugin(getIciSpan: () => { start: number; end: number } | null): uPlot.Plugin {
+  return {
+    hooks: {
+      drawClear: [
+        (u: uPlot) => {
+          const span = getIciSpan();
+          if (!span) return;
+          const xData = u.data[0] as number[] | undefined;
+          if (!xData || xData.length === 0) return;
+          const dataMin = xData[0];
+          const dataMax = xData[xData.length - 1];
+          const ctx = u.ctx;
+          const { left, top, width, height } = u.bbox;
+          ctx.save();
+          ctx.fillStyle = "rgba(220,38,38,0.10)";
+          const drawRange = (a: number, b: number): void => {
+            if (b <= a) return;
+            const x0 = Math.max(u.valToPos(a, "x", true), left);
+            const x1 = Math.min(u.valToPos(b, "x", true), left + width);
+            if (x1 <= x0) return;
+            ctx.fillRect(x0, top, x1 - x0, height);
+          };
+          drawRange(dataMin, span.start);
+          drawRange(span.end, dataMax);
+          ctx.restore();
+        },
+      ],
+    },
+  };
+}
+
 export interface WindowBoundsCallbacks {
   getWindow: () => RegressionWindow;
   onDrag: (next: RegressionWindow) => void;

@@ -3,7 +3,7 @@
 //! (§7.1-7.5 of ICI_WEB_SPEC.md). Regression/summary/smoothing are later
 //! modules -- this one only produces what R calls `segmented`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -34,10 +34,45 @@ impl State {
     }
 }
 
+/// Detects and drops rows outside "the ICI cycle" itself -- a file may
+/// legitimately also contain capacity-check cycles, OCV rests, a DCIR leg,
+/// ... that Stage A shouldn't be fitting and that shouldn't be allowed to
+/// anchor Q for the real ICI interruptions sharing their `(group, cyc.n,
+/// state)` key. Two independent criteria, either of which drops a whole
+/// rest id (its rest *and* the active pulse that produced it, §7.2's own
+/// pairing): (a) the rest itself is longer than `max_rest_duration_s` --
+/// real ICI pulses are short, so a much longer pause is an OCV/settling
+/// period, not part of the protocol; (b) the rest belongs to a run of
+/// consecutive short rests (within the same group and `cyc.n`) shorter
+/// than `min_repeat_count` -- a handful of short pulses (e.g. a DCIR leg's
+/// own rests) isn't itself "a continuous on/off pattern" just because none
+/// of them individually cleared the duration threshold.
+///
+/// `enabled: false` (the Rust-level default -- see `SegmentConfig::default`)
+/// is a complete no-op, which is what keeps every existing caller/test
+/// unaffected; the web app's own default flips it on.
+#[derive(Debug, Clone, Copy)]
+pub struct IciDetectionConfig {
+    pub enabled: bool,
+    pub max_rest_duration_s: f64,
+    pub min_repeat_count: usize,
+}
+
+impl Default for IciDetectionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_rest_duration_s: 300.0,
+            min_repeat_count: 20,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct SegmentConfig {
     pub state_threshold: f64,
     pub drop_unrested_reversals: bool,
+    pub ici_detection: IciDetectionConfig,
 }
 
 impl Default for SegmentConfig {
@@ -45,6 +80,7 @@ impl Default for SegmentConfig {
         Self {
             state_threshold: 0.0,
             drop_unrested_reversals: true,
+            ici_detection: IciDetectionConfig::default(),
         }
     }
 }
@@ -59,6 +95,9 @@ pub struct SegmentLog {
     /// started. Dropped and counted here rather than left to surface
     /// downstream as a mysterious "0 usable points" regression failure.
     pub leading_rest_rows_dropped: usize,
+    /// Rows dropped by `IciDetectionConfig` -- a whole rest id (rest + its
+    /// producing active pulse) at a time.
+    pub non_ici_rows_dropped: usize,
 }
 
 /// One row per *retained* sample, in original relative order. Mirrors R's
@@ -137,16 +176,38 @@ pub fn segment(
         assign_within_group(&groups, &keys, t, &mut step_t);
     }
 
+    // Non-ICI detection, *before* Q anchoring: a dropped (non-ICI) region's
+    // charge trajectory must never become the "first occurrence" anchor for
+    // a real ICI interruption sharing its (group, cyc.n, state) key -- see
+    // `detect_non_ici_rest_ids`'s own doc comment.
+    let non_ici_rest_ids = detect_non_ici_rest_ids(&groups, group_id, &state, &rest, cyc_n, t, &config.ici_detection);
+
     // §6 Q anchoring (R's start/start default) = charge - charge[first]
     // within (group, cyc.n, state).
     let mut anchored_charge = vec![0.0f64; n];
     {
         let cyc_bits: Vec<u64> = cyc_n.iter().map(|&c| c.to_bits()).collect();
         let keys: Vec<(u64, State)> = (0..n).map(|i| (cyc_bits[i], state[i])).collect();
-        assign_within_group(&groups, &keys, charge, &mut anchored_charge);
+        assign_within_group_skipping(&groups, &keys, &non_ici_rest_ids, group_id, &rest, charge, &mut anchored_charge);
     }
 
     let mut keep = vec![true; n];
+
+    // Fold in the non-ICI drop first (order relative to the three passes
+    // below doesn't matter for *them* -- they each look at raw `state`/
+    // `idx`, not `keep` -- but §7.5 below re-derives its own group list
+    // from `keep`, so doing this first means that pass correctly treats
+    // the last *ICI-kept* row, not the file's literal last row, as each
+    // group's effective end).
+    let mut non_ici_rows_dropped = 0usize;
+    if !non_ici_rest_ids.is_empty() {
+        for row in 0..n {
+            if non_ici_rest_ids.contains(&(group_id[row], rest[row])) {
+                keep[row] = false;
+                non_ici_rows_dropped += 1;
+            }
+        }
+    }
 
     // §7.2 spurious leading rest: if a group's data starts with `Rest`
     // (before any active run has occurred), that leading rest run has no
@@ -239,8 +300,98 @@ pub fn segment(
             reversal_rows_dropped,
             incomplete_final_rows_dropped,
             leading_rest_rows_dropped,
+            non_ici_rows_dropped,
         },
     )
+}
+
+/// `(group_id, rest_id)` pairs that `IciDetectionConfig` puts outside "the
+/// ICI cycle" -- dropping a rest id drops both its rest *and* the active
+/// pulse that produced it (§7.2's own on-then-off pairing), so Stage A
+/// never fits, and Q anchoring never anchors on, anything from a capacity-
+/// check cycle, an OCV rest, a DCIR leg, or similar.
+///
+/// Two independent criteria per rest run (a rest id's own `Rest`-state
+/// rows, spanning the same `[t_start, t_end]` `RestBoundaryDto` reports):
+/// (a) longer than `max_rest_duration_s` -- real ICI pulses are short, so a
+/// much longer pause is a settling/OCV period, not part of the protocol;
+/// (b) part of a run of consecutive short rests -- within the same group
+/// *and* `cyc.n`, a long rest or a `cyc.n` change ends the run -- shorter
+/// than `min_repeat_count`: a handful of short pulses (e.g. a DCIR leg's
+/// own rests) isn't "a continuous on/off pattern" just because none of
+/// them individually cleared the duration threshold.
+fn detect_non_ici_rest_ids(
+    groups: &[Vec<usize>],
+    group_id: &[u32],
+    state: &[State],
+    rest: &[u32],
+    cyc_n: &[f64],
+    t: &[f64],
+    config: &IciDetectionConfig,
+) -> HashSet<(u32, u32)> {
+    let mut non_ici: HashSet<(u32, u32)> = HashSet::new();
+    if !config.enabled {
+        return non_ici;
+    }
+
+    struct RestRun {
+        rest_id: u32,
+        cyc_bits: u64,
+        t_start: f64,
+        t_end: f64,
+    }
+
+    for idx in groups {
+        let Some(&first_row) = idx.first() else {
+            continue;
+        };
+        let gid = group_id[first_row];
+
+        let mut runs: Vec<RestRun> = Vec::new();
+        for &row in idx {
+            if state[row] != State::Rest {
+                continue;
+            }
+            let rid = rest[row];
+            if let Some(last) = runs.last_mut() {
+                if last.rest_id == rid {
+                    last.t_end = t[row];
+                    continue;
+                }
+            }
+            runs.push(RestRun {
+                rest_id: rid,
+                cyc_bits: cyc_n[row].to_bits(),
+                t_start: t[row],
+                t_end: t[row],
+            });
+        }
+
+        let mut i = 0;
+        while i < runs.len() {
+            let dur = runs[i].t_end - runs[i].t_start;
+            if dur > config.max_rest_duration_s {
+                non_ici.insert((gid, runs[i].rest_id));
+                i += 1;
+                continue;
+            }
+            let cyc_bits = runs[i].cyc_bits;
+            let start = i;
+            while i < runs.len() {
+                let d = runs[i].t_end - runs[i].t_start;
+                if d > config.max_rest_duration_s || runs[i].cyc_bits != cyc_bits {
+                    break;
+                }
+                i += 1;
+            }
+            if i - start < config.min_repeat_count {
+                for run in &runs[start..i] {
+                    non_ici.insert((gid, run.rest_id));
+                }
+            }
+        }
+    }
+    non_ici
 }
 
 /// §6: which end of a `(group, cyc.n, state)` run `Q` is anchored to zero
@@ -429,6 +580,34 @@ fn assign_within_group<K: Eq + Hash + Clone>(
     }
 }
 
+/// Like `assign_within_group`, but a row whose `(group_id, rest_id)` is in
+/// `skip` neither contributes to nor receives a "first occurrence" anchor
+/// -- used for Q anchoring so a dropped (non-ICI) region can never become
+/// the anchor point for a real ICI interruption sharing its key. A skipped
+/// row's `out` entry is left untouched; harmless, since `segment()` drops
+/// it from the final `SegmentedData` regardless.
+fn assign_within_group_skipping<K: Eq + Hash + Clone>(
+    groups: &[Vec<usize>],
+    keys: &[K],
+    skip: &HashSet<(u32, u32)>,
+    group_id: &[u32],
+    rest: &[u32],
+    source: &[f64],
+    out: &mut [f64],
+) {
+    for idx in groups {
+        let mut first_seen: HashMap<K, f64> = HashMap::new();
+        for &row in idx {
+            if skip.contains(&(group_id[row], rest[row])) {
+                continue;
+            }
+            let key = keys[row].clone();
+            let first = *first_seen.entry(key).or_insert(source[row]);
+            out[row] = source[row] - first;
+        }
+    }
+}
+
 /// Port of `find_unrested_reversal_rows()` (ici_analysis.R lines 354-376).
 /// Marks every sample in an active run that reverses directly into the
 /// opposite active state with no intervening rest.
@@ -564,6 +743,157 @@ fn sd(values: &[f64], mean_val: f64) -> f64 {
 mod tests {
     use super::*;
 
+    #[test]
+    fn ici_detection_drops_long_rests_and_their_producing_pulse() {
+        // A A R R | A A R R | A A R*10 (LONG) | A A R R
+        //  id 1(short) | id 2(short) |   id 3 (long)   | id 4(short)
+        let current = [
+            1.0, 1.0, 0.0, 0.0, // id 1
+            1.0, 1.0, 0.0, 0.0, // id 2
+            1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, // id 3: 10-row rest
+            1.0, 1.0, 0.0, 0.0, // id 4
+        ];
+        let n = current.len();
+        let group_id = vec![0u32; n];
+        let t: Vec<f64> = (0..n).map(|i| i as f64).collect();
+        let cyc_n = vec![1.0; n];
+        let voltage = vec![0.0; n];
+        let charge = vec![0.0; n];
+        let config = SegmentConfig {
+            state_threshold: 0.0,
+            drop_unrested_reversals: false,
+            ici_detection: IciDetectionConfig {
+                enabled: true,
+                max_rest_duration_s: 5.0,
+                min_repeat_count: 1, // isolates the duration criterion alone
+            },
+        };
+        let (seg, log) = segment(&group_id, &t, &cyc_n, &current, &voltage, &charge, &config);
+        assert_eq!(log.non_ici_rows_dropped, 12); // id 3's pulse (2 rows) + its 10-row rest
+        assert_eq!(seg.row_index, vec![0, 1, 2, 3, 4, 5, 6, 7, 20, 21, 22, 23]);
+    }
+
+    #[test]
+    fn ici_detection_drops_short_runs_below_min_repeat_count() {
+        // Three short pulse+rest pairs, all well under the duration
+        // threshold -- but fewer than min_repeat_count=5, so none of it
+        // counts as "a continuous on/off pattern" (e.g. a DCIR leg's own
+        // few pulses, none individually long enough to trip the duration
+        // criterion alone).
+        let current = [
+            1.0, 1.0, 0.0, 0.0, // id 1
+            1.0, 1.0, 0.0, 0.0, // id 2
+            1.0, 1.0, 0.0, 0.0, // id 3
+        ];
+        let n = current.len();
+        let group_id = vec![0u32; n];
+        let t: Vec<f64> = (0..n).map(|i| i as f64).collect();
+        let cyc_n = vec![1.0; n];
+        let voltage = vec![0.0; n];
+        let charge = vec![0.0; n];
+        let config = SegmentConfig {
+            state_threshold: 0.0,
+            drop_unrested_reversals: false,
+            ici_detection: IciDetectionConfig {
+                enabled: true,
+                max_rest_duration_s: 100.0, // nothing here is individually "long"
+                min_repeat_count: 5,
+            },
+        };
+        let (seg, log) = segment(&group_id, &t, &cyc_n, &current, &voltage, &charge, &config);
+        assert_eq!(log.non_ici_rows_dropped, n);
+        assert!(seg.row_index.is_empty());
+    }
+
+    #[test]
+    fn ici_detection_run_breaks_at_cyc_n_change() {
+        // Two short pulse+rest pairs at cyc.n=1, then two more at cyc.n=2:
+        // min_repeat_count=3 means neither cyc.n's own pair-count (2) meets
+        // the threshold, even though all 4 in a row would.
+        let current = [
+            1.0, 1.0, 0.0, 0.0, // id 1, cyc.n=1
+            1.0, 1.0, 0.0, 0.0, // id 2, cyc.n=1
+            1.0, 1.0, 0.0, 0.0, // id 3, cyc.n=2
+            1.0, 1.0, 0.0, 0.0, // id 4, cyc.n=2
+        ];
+        let n = current.len();
+        let group_id = vec![0u32; n];
+        let t: Vec<f64> = (0..n).map(|i| i as f64).collect();
+        let cyc_n = [vec![1.0; 8], vec![2.0; 8]].concat();
+        let voltage = vec![0.0; n];
+        let charge = vec![0.0; n];
+        let config = SegmentConfig {
+            state_threshold: 0.0,
+            drop_unrested_reversals: false,
+            ici_detection: IciDetectionConfig {
+                enabled: true,
+                max_rest_duration_s: 100.0,
+                min_repeat_count: 3,
+            },
+        };
+        let (seg, log) = segment(&group_id, &t, &cyc_n, &current, &voltage, &charge, &config);
+        assert_eq!(log.non_ici_rows_dropped, n);
+        assert!(seg.row_index.is_empty());
+    }
+
+    #[test]
+    fn ici_detection_disabled_by_default_is_a_complete_no_op() {
+        let current = [1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        let n = current.len();
+        let group_id = vec![0u32; n];
+        let t: Vec<f64> = (0..n).map(|i| i as f64).collect();
+        let cyc_n = vec![1.0; n];
+        let voltage = vec![0.0; n];
+        let charge = vec![0.0; n];
+        let (seg, log) = segment(&group_id, &t, &cyc_n, &current, &voltage, &charge, &SegmentConfig::default());
+        assert_eq!(log.non_ici_rows_dropped, 0);
+        assert_eq!(seg.row_index.len(), n);
+    }
+
+    /// The actual bug this ordering fixes: a non-ICI region's raw charge
+    /// baseline must never become the "first occurrence" anchor for a real
+    /// ICI interruption sharing its (group, cyc.n, state) key -- otherwise
+    /// every ICI Q value inherits a huge, meaningless offset from whatever
+    /// capacity-check cycle happened to come first in the file.
+    #[test]
+    fn non_ici_rows_never_anchor_charge_for_a_surviving_interruption() {
+        // id 1: a long charge leg (10 active rows, raw charge 100..109)
+        // followed by an 11-row (long) rest -- dropped as non-ICI.
+        // id 2: a short charge pulse (raw charge 500, 501) followed by a
+        // short rest -- kept.
+        let mut current = vec![1.0; 10];
+        current.extend(vec![0.0; 11]);
+        current.extend(vec![1.0; 2]);
+        current.extend(vec![0.0; 2]);
+        let n = current.len();
+        assert_eq!(n, 25);
+
+        let mut charge = (100..110).map(|v| v as f64).collect::<Vec<f64>>(); // id1 active: 100..109
+        charge.extend(vec![109.0; 11]); // id1 rest: unchanged
+        charge.extend([500.0, 501.0]); // id2 active
+        charge.extend([501.0, 501.0]); // id2 rest: unchanged
+
+        let group_id = vec![0u32; n];
+        let t: Vec<f64> = (0..n).map(|i| i as f64).collect();
+        let cyc_n = vec![1.0; n]; // same cyc.n throughout -- the exact scenario that corrupted anchoring
+        let voltage = vec![0.0; n];
+        let config = SegmentConfig {
+            state_threshold: 0.0,
+            drop_unrested_reversals: false,
+            ici_detection: IciDetectionConfig {
+                enabled: true,
+                max_rest_duration_s: 5.0, // id1's 10-unit rest is long; id2's 1-unit rest is short
+                min_repeat_count: 1,
+            },
+        };
+        let (seg, log) = segment(&group_id, &t, &cyc_n, &current, &voltage, &charge, &config);
+
+        assert_eq!(log.non_ici_rows_dropped, 21); // id1: 10 active + 11 rest
+        assert_eq!(seg.row_index, vec![21, 22, 23, 24]);
+        // id2's own first surviving Charge-state row anchors it -- not id1's 100.0 baseline.
+        assert_eq!(seg.charge, vec![0.0, 1.0, 0.0, 0.0]);
+    }
+
     fn states(labels: &[&str]) -> Vec<State> {
         labels
             .iter()
@@ -595,6 +925,7 @@ mod tests {
         let config = SegmentConfig {
             state_threshold: 0.0,
             drop_unrested_reversals: false,
+            ..Default::default()
         };
         let (seg, log) = segment(&group_id, &t, &cyc_n, &current, &voltage, &charge, &config);
         assert_eq!(log.leading_rest_rows_dropped, 2);
@@ -616,6 +947,7 @@ mod tests {
         let config = SegmentConfig {
             state_threshold: 0.0,
             drop_unrested_reversals: false,
+            ..Default::default()
         };
         let (seg, log) = segment(&group_id, &t, &cyc_n, &current, &voltage, &charge, &config);
         // No leading R -> no transition yet -> rest stays 1 through the R
@@ -801,6 +1133,7 @@ mod tests {
         let config = SegmentConfig {
             state_threshold: 0.0,
             drop_unrested_reversals: false,
+            ..Default::default()
         };
         let (seg, _log) = segment(&group_id, &t, &cyc_n, &current, &voltage, &charge, &config);
         seg

@@ -54,7 +54,7 @@ function columnIndependentFields(config: ExportedConfig): { fields: Partial<Data
       regressionWindow: config.regressionWindow,
       optimalWindowConfig: config.optimalWindowConfig,
     },
-    applied: ["Stage A parameters", "Stage B parameters", "QC thresholds and manual exclusions", "additional plots", "electrode area", "absolute-value display toggles", "regression window", "optimal window config", "Q anchoring"],
+    applied: ["Stage A parameters (including ICI cycle detection)", "Stage B parameters", "QC thresholds and manual exclusions", "additional plots", "electrode area", "absolute-value display toggles", "regression window", "optimal window config", "Q anchoring"],
   };
 }
 

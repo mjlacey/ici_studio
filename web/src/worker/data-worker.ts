@@ -181,6 +181,9 @@ self.onmessage = async (ev: MessageEvent<WorkerRequest>) => {
             msg.dropUnrestedReversals,
             msg.chargeAnchor,
             msg.dischargeAnchor,
+            msg.nonIciDetectionEnabled,
+            msg.nonIciMaxRestDurationS,
+            msg.nonIciMinRepeatCount,
           ),
         );
         post({ type: "segmentationResult", datasetId: msg.datasetId, requestId: msg.requestId, ok: true, summary });
@@ -210,6 +213,9 @@ self.onmessage = async (ev: MessageEvent<WorkerRequest>) => {
             msg.dropUnrestedReversals,
             msg.chargeAnchor,
             msg.dischargeAnchor,
+            msg.nonIciDetectionEnabled,
+            msg.nonIciMaxRestDurationS,
+            msg.nonIciMinRepeatCount,
             msg.tMin,
             msg.tMax,
             msg.voltageInterpWindow ?? undefined,

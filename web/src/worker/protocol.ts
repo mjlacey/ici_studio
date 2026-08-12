@@ -43,6 +43,9 @@ export interface SegmentationInput {
   groupingColumns: string[];
   stateThreshold: number;
   dropUnrestedReversals: boolean;
+  nonIciDetectionEnabled: boolean;
+  nonIciMaxRestDurationS: number;
+  nonIciMinRepeatCount: number;
   chargeAnchor: "start" | "end";
   dischargeAnchor: "start" | "end";
 }

@@ -4,12 +4,20 @@
 // spec's own wording. Pure functions mirroring analysis/qc.ts's style.
 
 import type { Dataset } from "../types";
+import { scaleFactor } from "../units";
 
 export type NormalizableColumn = "r" | "rErr" | "rSmooth" | "k" | "kErr" | "kSmooth" | "q" | "dVdQ" | "dQdV";
+
+// Internal charge unit is Ah (units.ts), but normalized Q/dQdV/dVdQ are
+// displayed in mAh -- the labels below promise mAh, so the Ah->mAh factor
+// has to be applied here alongside the area scaling, not left implicit.
+const AH_TO_MAH = 1 / scaleFactor("charge", "mAh");
 
 interface NormalizationSpec {
   op: "multiply" | "divide";
   label: string;
+  /** Extra unit-conversion factor applied before the area op, for columns carrying a charge unit (Ah -> mAh). */
+  chargeUnitScale?: number;
 }
 
 const NORMALIZATION: Record<NormalizableColumn, NormalizationSpec> = {
@@ -19,9 +27,9 @@ const NORMALIZATION: Record<NormalizableColumn, NormalizationSpec> = {
   k: { op: "multiply", label: "Ω cm²·s⁻¹ᐟ²" },
   kErr: { op: "multiply", label: "Ω cm²·s⁻¹ᐟ²" },
   kSmooth: { op: "multiply", label: "Ω cm²·s⁻¹ᐟ²" },
-  q: { op: "divide", label: "mAh cm⁻²" },
-  dVdQ: { op: "multiply", label: "V cm²·mAh⁻¹" },
-  dQdV: { op: "divide", label: "mAh·V⁻¹·cm⁻²" },
+  q: { op: "divide", label: "mAh cm⁻²", chargeUnitScale: AH_TO_MAH },
+  dVdQ: { op: "multiply", label: "V cm²·mAh⁻¹", chargeUnitScale: 1 / AH_TO_MAH },
+  dQdV: { op: "divide", label: "mAh·V⁻¹·cm⁻²", chargeUnitScale: AH_TO_MAH },
 };
 
 type NormalizationDataset = Pick<Dataset, "normalizeToArea" | "electrodeAreaCm2">;
@@ -33,7 +41,8 @@ function isNormalizable(column: string): column is NormalizableColumn {
 export function normalizeValue(column: string, value: number, dataset: NormalizationDataset): number {
   if (!dataset.normalizeToArea || !isNormalizable(column)) return value;
   const spec = NORMALIZATION[column];
-  return spec.op === "multiply" ? value * dataset.electrodeAreaCm2 : value / dataset.electrodeAreaCm2;
+  const scaled = value * (spec.chargeUnitScale ?? 1);
+  return spec.op === "multiply" ? scaled * dataset.electrodeAreaCm2 : scaled / dataset.electrodeAreaCm2;
 }
 
 export function applyColumnNormalization(column: string, values: (number | null)[], dataset: NormalizationDataset): (number | null)[] {

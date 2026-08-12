@@ -2,6 +2,7 @@ import "./style.css";
 import { startStageBEffect } from "./analysis/stage-runner";
 import { startSessionPersistEffect } from "./analysis/session-persist";
 import { activeDataset, store } from "./state";
+import { cycleThemePreference, getThemePreference, initTheme, type ThemePreference } from "./theme";
 import { mountAdditionalPlotsPanel } from "./panels/additional-plots-panel";
 import { mountColumnMappingPanel } from "./panels/column-mapping-panel";
 import { mountExportPanel } from "./panels/export-panel";
@@ -27,9 +28,14 @@ import { DataWorkerClient } from "./worker/client";
 // Desktop-only three-column shell (playbook §4 / spec §5.2 raw-data-viewer
 // placement): left = import/parse-card/mapping/regression-window
 // (scrollable), centre = plots, right = raw data inspector.
+initTheme();
+
 const app = document.querySelector<HTMLDivElement>("#app")!;
 app.innerHTML = `
-  <header class="app-header">ICI Studio <span class="hint">— ICI analysis</span></header>
+  <header class="app-header">
+    <span>ICI Studio <span class="hint">— ICI analysis</span></span>
+    <button type="button" class="theme-toggle" id="theme-toggle"></button>
+  </header>
   <div id="restore-banner-container"></div>
   <div id="threshold-suggestion-banner-container"></div>
   <div class="app-shell">
@@ -40,6 +46,14 @@ app.innerHTML = `
     <aside class="right-column" id="right-column"></aside>
   </div>
 `;
+
+const THEME_LABEL: Record<ThemePreference, string> = { system: "🖥 System", light: "☀ Light", dark: "🌙 Dark" };
+const themeToggle = document.querySelector<HTMLButtonElement>("#theme-toggle")!;
+themeToggle.textContent = THEME_LABEL[getThemePreference()];
+themeToggle.title = "Cycle theme: system / light / dark";
+themeToggle.addEventListener("click", () => {
+  themeToggle.textContent = THEME_LABEL[cycleThemePreference()];
+});
 
 mountRestoreBanner(document.querySelector<HTMLDivElement>("#restore-banner-container")!);
 mountThresholdSuggestionBanner(document.querySelector<HTMLDivElement>("#threshold-suggestion-banner-container")!);

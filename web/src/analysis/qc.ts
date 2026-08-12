@@ -44,7 +44,7 @@ export function rowExclusionKey(table: AnalysisTable, i: number): string {
   return `${table.groupId[i]}:${table.rest[i]}`;
 }
 
-/** A manual override wins outright; absent one, exclusion falls back to "does any enabled, exclude-from-smoothing flag match this row". */
+/** A manual override wins outright; absent one, exclusion falls back to "does any enabled, exclude-from-smoothing flag match this row". Non-ICI rows never reach here at all -- `StageAConfig`'s ICI-cycle detection drops them during segmentation, before Stage A ever produces a row for them. */
 export function isRowExcluded(table: AnalysisTable, i: number, cfg: QcConfig, manualExclusions: ManualExclusions): boolean {
   const manual = manualExclusions[rowExclusionKey(table, i)];
   if (manual === "include") return false;

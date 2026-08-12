@@ -500,9 +500,53 @@ fn parse_cell(field: &str, decimal: DecimalSeparator) -> Cell {
         DecimalSeparator::Dot => std::borrow::Cow::Borrowed(t),
         DecimalSeparator::Comma => std::borrow::Cow::Owned(t.replacen(',', ".", 1)),
     };
-    match normalized.parse::<f64>() {
-        Ok(v) if v.is_finite() => Cell::Number(v),
-        _ => Cell::Invalid,
+    if let Ok(v) = normalized.parse::<f64>() {
+        if v.is_finite() {
+            return Cell::Number(v);
+        }
+    }
+    match parse_numeric_with_unit_suffix(&normalized) {
+        Some(v) => Cell::Number(v),
+        None => Cell::Invalid,
+    }
+}
+
+/// Some instrument exports stringify an otherwise-numeric column with a
+/// trailing unit label baked into every cell -- e.g. a direct .mf4->.csv
+/// conversion producing a time column of "0 sec", "1 sec", ... instead of
+/// a bare number (observed directly in a real export; R would read the
+/// same column in as character for the same reason). Not vendor-specific:
+/// this is a fallback tried only after a plain numeric parse has already
+/// failed, so it can't reclassify a column that already parses cleanly.
+///
+/// Only strips a *short trailing run of unit-like characters* (ASCII
+/// letters, or one of a handful of common unit symbols) -- so a genuine
+/// text column (e.g. "charge"/"rest"/"discharge", or a cell ID like
+/// "N23BM3") is untouched: those have no leading digit for this to anchor
+/// on, or don't end in a short alphabetic run at all.
+fn parse_numeric_with_unit_suffix(t: &str) -> Option<f64> {
+    const MAX_SUFFIX_LEN: usize = 8;
+    let trimmed = t.trim_end();
+    let chars: Vec<char> = trimmed.chars().collect();
+    let n = chars.len();
+    let mut split = n;
+    while split > 0 {
+        let c = chars[split - 1];
+        if c.is_ascii_alphabetic() || matches!(c, '%' | '°' | 'µ' | 'Ω') {
+            split -= 1;
+        } else {
+            break;
+        }
+    }
+    // No suffix at all, or the entire cell is the "suffix" (no numeric
+    // prefix to anchor on -- e.g. plain text like "charge").
+    if split == n || split == 0 || n - split > MAX_SUFFIX_LEN {
+        return None;
+    }
+    let numeric_part: String = chars[..split].iter().collect();
+    match numeric_part.trim_end().parse::<f64>() {
+        Ok(v) if v.is_finite() => Some(v),
+        _ => None,
     }
 }
 
@@ -906,6 +950,44 @@ time/s\tEwe/V\n\
         let table = parse_default(text.as_bytes()).unwrap();
         assert!((table.columns[0].values[0] - 2.901364069601998E+005).abs() < 1e-6);
         assert!((table.columns[0].values[1] - 1.0E-003).abs() < 1e-12);
+    }
+
+    #[test]
+    fn numeric_column_with_trailing_unit_suffix_parses_as_numeric() {
+        // Observed directly in a real instrument's direct .mf4->.csv export:
+        // a time column stringified as "0 sec", "1 sec", ... instead of a
+        // bare number.
+        let text = "t,x\n0 sec,1\n1 sec,2\n2 sec,3\n3 sec,4\n4 sec,5\n";
+        let table = parse_default(text.as_bytes()).unwrap();
+        assert!(table.columns[0].is_numeric);
+        assert_eq!(table.columns[0].values, vec![0.0, 1.0, 2.0, 3.0, 4.0]);
+        assert!(table.report.coercion_failures.is_empty());
+    }
+
+    #[test]
+    fn unit_suffix_parsing_composes_with_comma_decimal_separator() {
+        let text = "t;x\n0,5 sec;1\n1,25 sec;2\n2,5 sec;3\n3,0 sec;4\n4,75 sec;5\n";
+        let table = parse_default(text.as_bytes()).unwrap();
+        assert!(table.columns[0].is_numeric);
+        assert_eq!(table.columns[0].values, vec![0.5, 1.25, 2.5, 3.0, 4.75]);
+    }
+
+    #[test]
+    fn text_column_without_a_leading_number_is_not_coerced() {
+        // "charge"/"rest"/"discharge" have no leading digit at all -- the
+        // unit-suffix fallback must not turn a genuine text/grouping column
+        // numeric.
+        let text = "t,state\n0,charge\n1,charge\n2,rest\n3,rest\n4,discharge\n";
+        let overrides = ParseOverrides {
+            skip_lines: Some(0),
+            ..Default::default()
+        };
+        let table = parse(text.as_bytes(), &overrides).unwrap();
+        assert!(!table.columns[1].is_numeric);
+        assert_eq!(
+            table.columns[1].strings,
+            vec!["charge", "charge", "rest", "rest", "discharge"]
+        );
     }
 
     #[test]

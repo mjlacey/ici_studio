@@ -16,6 +16,7 @@ import { applyAxisRange, axisControlsHtml, defaultAxisRange, robustRange, setAxi
 import { errorBarPlugin, type ErrorBarPoint } from "./error-bar-plugin";
 import { naturalOrderPathBuilder } from "./natural-order-path";
 import { pngExportControlHtml, wirePngExportControl } from "./png-export";
+import { chartBgColor, chartGridColor, chartTextColor, onThemeChange } from "../theme";
 
 interface XColumn {
   key: string;
@@ -38,7 +39,7 @@ const X_COLUMNS: XColumn[] = [
 const GROUP_PALETTE = ["#16a34a", "#7c3aed", "#0891b2", "#ea580c", "#db2777", "#65a30d", "#0284c7", "#c026d3"];
 const CHARGE_COLOR = "#2563eb";
 const DISCHARGE_COLOR = "#f97316";
-const SURFACE_COLOR = "#ffffff"; // matches --bg -- "hollow" = fill the marker with the page background.
+const SURFACE_COLOR = chartBgColor; // "hollow" = fill the marker with the page background -- theme-aware, read live at draw time (uPlot's fnOrSelf).
 const CLICK_HIT_RADIUS_PX = 10;
 
 function nullIfNotFinite(v: number | null): number | null {
@@ -345,7 +346,10 @@ export function mountResistancePlot(container: HTMLElement, opts: ResistancePlot
       width: host.clientWidth || 800,
       height: 280,
       scales: { x: { time: false, distr: xRange.log ? 3 : 1 }, y: { distr: yRange.log ? 3 : 1 } },
-      axes: [{ label: xColLabel }, { label: yAxisLabel }],
+      axes: [
+        { label: xColLabel, stroke: chartTextColor, grid: { stroke: chartGridColor }, ticks: { stroke: chartGridColor } },
+        { label: yAxisLabel, stroke: chartTextColor, grid: { stroke: chartGridColor }, ticks: { stroke: chartGridColor } },
+      ],
       series,
       plugins: [
         errorBarPlugin({
@@ -417,4 +421,5 @@ export function mountResistancePlot(container: HTMLElement, opts: ResistancePlot
 
   store.subscribe(render);
   render();
+  onThemeChange(() => chart?.redraw(true, true));
 }

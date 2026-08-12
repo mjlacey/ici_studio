@@ -15,7 +15,8 @@ use ici_core::parse::{
 use ici_core::regress::{fit_rest_window, rest_regression, RegressionConfig, RestFitError};
 use ici_core::segment::{
     self, interruption_summary, reanchor_charge, split_current_levels, AnchorPoint,
-    QAnchorConfig, SegmentConfig, SegmentLog, SegmentedData, State, SummaryConfig,
+    IciDetectionConfig, QAnchorConfig, SegmentConfig, SegmentLog, SegmentedData, State,
+    SummaryConfig,
 };
 use ici_core::spline::{smooth_bspline_vec, Direction, DirectionUsed, SplineConfig, SplineDiagnostics};
 use ici_core::types::{
@@ -139,6 +140,9 @@ struct SegmentationSummaryDto {
     /// that group's raw current -- surfaced as a blocking "use suggested
     /// threshold" banner rather than applied silently.
     threshold_suggestions: Vec<ThresholdSuggestionDto>,
+    /// Rows dropped by `IciDetectionConfig` -- outside "the ICI cycle"
+    /// itself (a capacity-check cycle, an OCV rest, a DCIR leg, ...).
+    non_ici_rows_dropped: usize,
 }
 
 #[derive(Serialize, Clone)]
@@ -548,6 +552,7 @@ pub fn parse_file(bytes: &[u8], overrides_json: &str) -> Result<ParsedDataset, J
         inner: table,
         segmentation: None,
         segmentation_log: None,
+        raw_series: None,
         group_key_columns: None,
         grouping_column_names: Vec::new(),
         analysis: None,
@@ -569,6 +574,17 @@ pub struct ParsedDataset {
     /// (unrested reversals, incomplete final step) -- cached alongside
     /// `segmentation` since both come from the same `do_segment` call.
     segmentation_log: Option<SegmentLog>,
+    /// The mapped+scaled `(t, E, I)` triple, cached independently of
+    /// `segmentation` -- `decimatedSeriesJson` (Plot 1's raw time series)
+    /// reads from here rather than `segmentation`'s own arrays specifically
+    /// so a non-ICI region (§ `IciDetectionConfig`) that `do_segment` drops
+    /// from `segmentation` for Stage A's purposes doesn't also vanish from
+    /// the raw view -- the whole point of shading it there instead of
+    /// hiding it. Was previously read straight from `segmentation` (a pure
+    /// optimisation, since §7.4/7.5's own drops are a tiny fraction of the
+    /// file); that assumption no longer holds once non-ICI drops can be a
+    /// large fraction, hence the separate cache.
+    raw_series: Option<(Vec<f64>, Vec<f64>, Vec<f64>)>,
     /// `group_id -> that group's grouping-column string values`, cached
     /// alongside `segmentation`. Stage B's smoothing key (§8.1) can select
     /// an arbitrary *subset* of the grouping columns, which the combined
@@ -850,6 +866,9 @@ impl ParsedDataset {
         drop_unrested_reversals: bool,
         charge_anchor: &str,
         discharge_anchor: &str,
+        ici_detection_enabled: bool,
+        non_ici_max_rest_duration_s: f64,
+        non_ici_min_repeat_count: usize,
     ) -> Result<(), JsValue> {
         let find_numeric = |name: &str| -> Result<&Column, JsValue> {
             self.inner
@@ -887,6 +906,11 @@ impl ParsedDataset {
             .collect();
         let charge: Vec<f64> = charge_col.values.iter().map(|v| v * charge_scale).collect();
 
+        // Cached independently of `segmentation` -- see `raw_series`'s own
+        // doc comment for why `decimatedSeriesJson` needs this rather than
+        // reading `self.segmentation`'s (possibly non-ICI-filtered) arrays.
+        self.raw_series = Some((t.clone(), voltage.clone(), current.clone()));
+
         let grouping_columns: Vec<String> = serde_json::from_str(grouping_columns_json)
             .map_err(|e| js_error(format!("invalid groupingColumns JSON: {e}")))?;
         let grouping_cols: Vec<Vec<String>> = grouping_columns
@@ -909,6 +933,11 @@ impl ParsedDataset {
         let config = SegmentConfig {
             state_threshold,
             drop_unrested_reversals,
+            ici_detection: IciDetectionConfig {
+                enabled: ici_detection_enabled,
+                max_rest_duration_s: non_ici_max_rest_duration_s,
+                min_repeat_count: non_ici_min_repeat_count,
+            },
         };
         let (mut seg, log) =
             segment::segment(&group_id, &t, &cyc_n, &current, &voltage, &charge, &config);
@@ -950,6 +979,9 @@ impl ParsedDataset {
         drop_unrested_reversals: bool,
         charge_anchor: &str,
         discharge_anchor: &str,
+        ici_detection_enabled: bool,
+        non_ici_max_rest_duration_s: f64,
+        non_ici_min_repeat_count: usize,
     ) -> Result<String, JsValue> {
         self.do_segment(
             time_column,
@@ -966,6 +998,9 @@ impl ParsedDataset {
             drop_unrested_reversals,
             charge_anchor,
             discharge_anchor,
+            ici_detection_enabled,
+            non_ici_max_rest_duration_s,
+            non_ici_min_repeat_count,
         )?;
         let summary = segmentation_summary_dto(
             self.segmentation.as_ref().unwrap(),
@@ -1018,6 +1053,9 @@ impl ParsedDataset {
         drop_unrested_reversals: bool,
         charge_anchor: &str,
         discharge_anchor: &str,
+        ici_detection_enabled: bool,
+        non_ici_max_rest_duration_s: f64,
+        non_ici_min_repeat_count: usize,
         t_min: f64,
         t_max: f64,
         voltage_interp_window: Option<f64>,
@@ -1040,6 +1078,9 @@ impl ParsedDataset {
             drop_unrested_reversals,
             charge_anchor,
             discharge_anchor,
+            ici_detection_enabled,
+            non_ici_max_rest_duration_s,
+            non_ici_min_repeat_count,
         )?;
         let seg = self.segmentation.as_ref().unwrap();
 
@@ -1350,21 +1391,23 @@ impl ParsedDataset {
     }
 
     /// LTTB-decimated `(t, E, I)` series within `[x_min, x_max]` for Plot 1
-    /// (§11.1), re-called on zoom so detail returns. Uses the already-scaled,
-    /// segmented arrays (post §7.4/§7.5 row-dropping) rather than re-reading
-    /// the raw columns -- the dropped rows are a tiny fraction of the file
-    /// and this avoids a second scaling pass.
+    /// (§11.1), re-called on zoom so detail returns. Reads the independently
+    /// -cached, already-scaled `raw_series` (see its own doc comment) --
+    /// *not* `segmentation`'s arrays, which can have a large fraction of the
+    /// file's rows missing once `IciDetectionConfig` is enabled. Plot 1's
+    /// whole point is to still show that excluded data (shaded, via the
+    /// rest boundaries it separately gets), not silently drop it.
     #[wasm_bindgen(js_name = decimatedSeriesJson)]
     pub fn decimated_series_json(&self, x_min: f64, x_max: f64, target_points: usize) -> String {
-        let Some(seg) = &self.segmentation else {
+        let Some((raw_t, raw_e, raw_i)) = &self.raw_series else {
             return "null".to_string();
         };
-        let idx_in_range: Vec<usize> = (0..seg.t.len())
-            .filter(|&i| seg.t[i] >= x_min && seg.t[i] <= x_max)
+        let idx_in_range: Vec<usize> = (0..raw_t.len())
+            .filter(|&i| raw_t[i] >= x_min && raw_t[i] <= x_max)
             .collect();
-        let t: Vec<f64> = idx_in_range.iter().map(|&i| seg.t[i]).collect();
-        let e: Vec<f64> = idx_in_range.iter().map(|&i| seg.voltage[i]).collect();
-        let i_series: Vec<f64> = idx_in_range.iter().map(|&i| seg.current[i]).collect();
+        let t: Vec<f64> = idx_in_range.iter().map(|&i| raw_t[i]).collect();
+        let e: Vec<f64> = idx_in_range.iter().map(|&i| raw_e[i]).collect();
+        let i_series: Vec<f64> = idx_in_range.iter().map(|&i| raw_i[i]).collect();
 
         let selected = lttb(&t, &e, target_points);
         let dto = DecimatedSeriesDto {
@@ -1508,6 +1551,7 @@ fn segmentation_summary_dto(
         incomplete_final_rows_dropped: log.incomplete_final_rows_dropped,
         leading_rest_rows_dropped: log.leading_rest_rows_dropped,
         threshold_suggestions,
+        non_ici_rows_dropped: log.non_ici_rows_dropped,
     }
 }
 

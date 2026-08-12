@@ -13,6 +13,7 @@ import type { DataWorkerClient } from "../worker/client";
 import { applyAxisRange, axisControlsHtml, defaultAxisRange, wireAxisControls } from "./axis-controls";
 import { regressionWindowPlugin } from "./band-plugin";
 import { pngExportControlHtml, wirePngExportControl } from "./png-export";
+import { chartGridColor, chartTextColor, onThemeChange } from "../theme";
 
 export function mountPlot2(container: HTMLElement, worker: DataWorkerClient): void {
   let chart: uPlot | null = null;
@@ -109,7 +110,10 @@ export function mountPlot2(container: HTMLElement, worker: DataWorkerClient): vo
       width,
       height: 300,
       scales: { x: { time: false, distr: xRange.log ? 3 : 1 }, y: { distr: yRange.log ? 3 : 1 } },
-      axes: [{ label: "√(step.t) [√s]" }, { label: "E (V)" }],
+      axes: [
+        { label: "√(step.t) [√s]", stroke: chartTextColor, grid: { stroke: chartGridColor }, ticks: { stroke: chartGridColor } },
+        { label: "E (V)", stroke: chartTextColor, grid: { stroke: chartGridColor }, ticks: { stroke: chartGridColor } },
+      ],
       series: [
         { label: "√(step.t)" },
         { label: "in window", scale: "y", paths: () => null, points: { show: true, size: 6, fill: "#2563eb", stroke: "#2563eb" } },
@@ -220,4 +224,5 @@ export function mountPlot2(container: HTMLElement, worker: DataWorkerClient): vo
 
   store.subscribe(render);
   render();
+  onThemeChange(() => chart?.redraw(true, true));
 }

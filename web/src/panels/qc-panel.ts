@@ -39,7 +39,9 @@ export function mountQcPanel(container: HTMLElement): void {
 
 function renderPanel(container: HTMLElement, dataset: Dataset): void {
   const cfg = dataset.qcConfig;
-  const summary = qcSummary(dataset.stageAResult!.analysisTable, cfg, dataset.manualExclusions);
+  const result = dataset.stageAResult!;
+  const summary = qcSummary(result.analysisTable, cfg, dataset.manualExclusions);
+  const nonIciDropped = result.segmentation.nonIciRowsDropped;
 
   const rows = FLAG_DEFS.map((def) => {
     const setting = cfg[def.key];
@@ -69,6 +71,7 @@ function renderPanel(container: HTMLElement, dataset: Dataset): void {
         <button type="button" class="link-btn" data-filter="excluded">${summary.excluded} excluded</button>
         ${dataset.qcTableFilter !== "all" ? `· <button type="button" class="link-btn" data-filter="all">show all</button>` : ""}
       </p>
+      ${nonIciDropped > 0 ? `<p class="hint">${nonIciDropped} raw row(s) excluded during segmentation as outside the detected ICI cycle (see Stage A's "ICI cycle detection" settings).</p>` : ""}
     </section>
   `;
 

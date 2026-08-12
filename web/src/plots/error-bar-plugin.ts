@@ -6,6 +6,7 @@
 // pixel-space hazard here.
 
 import type uPlot from "uplot";
+import { chartMutedColor } from "../theme";
 
 export interface ErrorBarPoint {
   x: number;
@@ -36,7 +37,7 @@ export function errorBarPlugin(opts: ErrorBarOptions): uPlot.Plugin {
           const dpr = u.bbox.width / u.over.getBoundingClientRect().width;
           const ctx = u.ctx;
           ctx.save();
-          ctx.strokeStyle = opts.color ?? "rgba(71,85,105,0.65)";
+          ctx.strokeStyle = opts.color ?? chartMutedColor(0.65);
           ctx.lineWidth = 1;
           for (const p of points) {
             if (!Number.isFinite(p.y) || !Number.isFinite(p.err) || p.err <= 0) continue;
