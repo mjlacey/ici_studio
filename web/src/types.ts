@@ -4,6 +4,9 @@
 export type Encoding = "Utf8" | "Cp1252";
 export type Delimiter = "Tab" | "Comma" | "Semicolon" | "Pipe";
 export type DecimalSeparator = "Dot" | "Comma";
+/** Which importer produced a dataset. `encoding`/`delimiter`/`decimalSeparator` are text-sniffing
+ * decisions that don't apply to a binary `Mdf4` source -- the Parse Card hides them for those. */
+export type SourceFormat = "Text" | "Mdf4";
 
 export interface CoercionFailure {
   column: string;
@@ -25,6 +28,7 @@ export interface ParseReport {
   raggedRowLineNumbers: number[];
   coercionFailures: CoercionFailure[];
   warnings: string[];
+  source: SourceFormat;
 }
 
 export interface ColumnInfo {

@@ -10,7 +10,7 @@ use ici_core::deriv::local_poly_derivative;
 use ici_core::derive::{derive, AnalysisTable, DeriveConfig};
 use ici_core::optimal_window::{self, GridConfig, RestCandidate};
 use ici_core::parse::{
-    self, Column, DecimalSeparator, Delimiter, Encoding, ParseError, ParsedTable,
+    self, Column, DecimalSeparator, Delimiter, Encoding, ParseError, ParsedTable, SourceFormat,
 };
 use ici_core::regress::{fit_rest_window, rest_regression, RegressionConfig, RestFitError};
 use ici_core::segment::{
@@ -46,6 +46,7 @@ struct ParseReportDto {
     ragged_row_line_numbers: Vec<usize>,
     coercion_failures: Vec<CoercionFailureDto>,
     warnings: Vec<String>,
+    source: &'static str,
 }
 
 #[derive(Serialize)]
@@ -384,6 +385,13 @@ fn decimal_separator_str(d: DecimalSeparator) -> &'static str {
     }
 }
 
+fn source_str(s: SourceFormat) -> &'static str {
+    match s {
+        SourceFormat::Text => "Text",
+        SourceFormat::Mdf4 => "Mdf4",
+    }
+}
+
 fn parse_encoding(s: &str) -> Result<Encoding, String> {
     match s {
         "Utf8" => Ok(Encoding::Utf8),
@@ -491,6 +499,7 @@ fn report_dto(report: &parse::ParseReport) -> ParseReportDto {
             })
             .collect(),
         warnings: report.warnings.clone(),
+        source: source_str(report.source),
     }
 }
 
@@ -548,6 +557,28 @@ fn column_stats(column: &Column) -> ColumnStatsDto {
 pub fn parse_file(bytes: &[u8], overrides_json: &str) -> Result<ParsedDataset, JsValue> {
     let overrides = overrides_from_json(overrides_json)?;
     let table = parse::parse(bytes, &overrides).map_err(parse_error_to_js)?;
+    Ok(ParsedDataset {
+        inner: table,
+        segmentation: None,
+        segmentation_log: None,
+        raw_series: None,
+        group_key_columns: None,
+        grouping_column_names: Vec::new(),
+        analysis: None,
+        optimal_window_sample: None,
+        optimal_window_grid: None,
+        threshold_suggestions: Vec::new(),
+    })
+}
+
+/// Converts an MDF4 (`.mf4`) file to the same [`ParsedDataset`] shape
+/// `parse_file` produces, so every downstream step (column mapping,
+/// segmentation, Stage A/B) runs unaware of which importer ran --
+/// `core::mf4::convert_to_table` does the actual binary-to-table work.
+#[wasm_bindgen]
+pub fn parse_mf4_file(bytes: &[u8]) -> Result<ParsedDataset, JsValue> {
+    let table = ici_core::mf4::convert_to_table(bytes)
+        .map_err(|e| js_error(e.to_string()))?;
     Ok(ParsedDataset {
         inner: table,
         segmentation: None,

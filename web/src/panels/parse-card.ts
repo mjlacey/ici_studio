@@ -21,6 +21,12 @@ export function mountParseCard(container: HTMLElement, worker: DataWorkerClient)
       container.innerHTML = "";
       return;
     }
+    // §4.1: the sniffer overrides (encoding/delimiter/decimal separator/skip
+    // lines/header) are all text-file concepts -- meaningless for a binary
+    // MDF4 import, which has nothing to reparse with. Filename-based rather
+    // than `report.source`-based so the check still works in the error
+    // state, where there's no report yet.
+    const isMdf4 = dataset.filename.toLowerCase().endsWith(".mf4");
 
     if (dataset.status === "error") {
       container.innerHTML = `
@@ -32,9 +38,9 @@ export function mountParseCard(container: HTMLElement, worker: DataWorkerClient)
               ? `<p class="hint">Delimiters tried: ${dataset.parseError.delimitersTried.join(", ")}</p>`
               : ""
           }
-          ${renderOverrides(dataset.overrides)}
+          ${isMdf4 ? "" : renderOverrides(dataset.overrides)}
         </section>`;
-      wireOverrideInputs(container, dataset.id, worker);
+      if (!isMdf4) wireOverrideInputs(container, dataset.id, worker);
       return;
     }
 
@@ -43,11 +49,11 @@ export function mountParseCard(container: HTMLElement, worker: DataWorkerClient)
       <section class="panel">
         <h2>Parse card</h2>
         <table class="kv-table">
-          <tr><th>Encoding</th><td>${report.encoding}</td></tr>
-          <tr><th>Delimiter</th><td>${report.delimiter}</td></tr>
-          <tr><th>Decimal separator</th><td>${report.decimalSeparator}</td></tr>
-          <tr><th>Preamble lines skipped</th><td>${report.preambleLinesSkipped}</td></tr>
-          <tr><th>Header</th><td>${report.headerSynthesized ? "synthesised (col1…colN)" : "found"}</td></tr>
+          ${isMdf4 ? "" : `<tr><th>Encoding</th><td>${report.encoding}</td></tr>`}
+          ${isMdf4 ? "" : `<tr><th>Delimiter</th><td>${report.delimiter}</td></tr>`}
+          ${isMdf4 ? "" : `<tr><th>Decimal separator</th><td>${report.decimalSeparator}</td></tr>`}
+          ${isMdf4 ? "" : `<tr><th>Preamble lines skipped</th><td>${report.preambleLinesSkipped}</td></tr>`}
+          ${isMdf4 ? "" : `<tr><th>Header</th><td>${report.headerSynthesized ? "synthesised (col1…colN)" : "found"}</td></tr>`}
           <tr><th>Rows × columns</th><td>${report.nRows.toLocaleString()} × ${report.nColumns}</td></tr>
           ${report.trailingColumnDropped ? `<tr><th>Trailing column</th><td>dropped (trailing delimiter)</td></tr>` : ""}
           ${report.raggedRowsDropped > 0 ? `<tr><th>Ragged rows dropped</th><td>${report.raggedRowsDropped} (first: ${report.raggedRowLineNumbers.join(", ")})</td></tr>` : ""}
@@ -57,10 +63,10 @@ export function mountParseCard(container: HTMLElement, worker: DataWorkerClient)
             ? `<ul class="warnings">${report.warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join("")}</ul>`
             : ""
         }
-        ${renderOverrides(dataset.overrides)}
+        ${isMdf4 ? "" : renderOverrides(dataset.overrides)}
       </section>
     `;
-    wireOverrideInputs(container, dataset.id, worker);
+    if (!isMdf4) wireOverrideInputs(container, dataset.id, worker);
   }
 
   store.subscribe(render);

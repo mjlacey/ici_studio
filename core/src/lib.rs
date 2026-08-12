@@ -3,6 +3,7 @@
 pub mod decimate;
 pub mod deriv;
 pub mod derive;
+pub mod mf4;
 pub mod optimal_window;
 pub mod parse;
 pub mod regress;

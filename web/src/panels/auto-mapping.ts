@@ -26,7 +26,12 @@ const FIELD_PATTERNS: FieldPatterns[] = [
   },
   {
     field: "voltage",
-    patterns: [/^Ewe\/V$/i, /^E$/i, /^ecell/i, /voltage/i],
+    // Bare "E" is a weak, ambiguous signal -- it's shorthand for voltage in
+    // some BioLogic-style exports, but MDF4 exports seen in practice use it
+    // for *Energy* (Wh) instead, with "U" (IEC convention) as the actual
+    // voltage channel. Tried last, after every less ambiguous candidate,
+    // so a file that has both only picks "E" when nothing better exists.
+    patterns: [/^Ewe\/V$/i, /^U$/i, /^ecell/i, /voltage/i, /^E$/i],
     unitPatterns: [
       { regex: /\/mV$/i, unit: "mV" },
       { regex: /\/V$/i, unit: "V" },

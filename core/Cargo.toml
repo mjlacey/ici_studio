@@ -10,6 +10,13 @@ path = "src/lib.rs"
 [dependencies]
 encoding_rs = "0.8"
 nalgebra = "0.33"
+# For core::mf4 (a vendored, trimmed subset of mf4-rs -- see core/src/mf4/mod.rs):
+nom = "8"
+byteorder = "1.5"
+meval = "0.2"
+thiserror = "2.0"
+serde = { version = "1.0", features = ["derive"] }
+miniz_oxide = "0.8"
 
 [dev-dependencies]
 serde_json = "1"

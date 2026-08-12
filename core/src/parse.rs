@@ -91,6 +91,17 @@ pub struct CoercionFailure {
     pub first_rows: Vec<usize>,
 }
 
+/// Which parser produced a [`ParsedTable`] -- `Delimiter`/`DecimalSeparator`/
+/// `Encoding` above describe text-file sniffing decisions that simply don't
+/// apply to a binary MDF4 source (`core::mf4`); callers use this to decide
+/// whether to display those fields at all rather than show meaningless
+/// defaults for an `Mdf4`-sourced report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SourceFormat {
+    Text,
+    Mdf4,
+}
+
 #[derive(Debug, Clone)]
 pub struct ParseReport {
     pub encoding: Encoding,
@@ -107,6 +118,7 @@ pub struct ParseReport {
     pub ragged_row_line_numbers: Vec<usize>,
     pub coercion_failures: Vec<CoercionFailure>,
     pub warnings: Vec<String>,
+    pub source: SourceFormat,
 }
 
 #[derive(Debug, Clone)]
@@ -415,6 +427,7 @@ pub fn parse(bytes: &[u8], overrides: &ParseOverrides) -> Result<ParsedTable, Pa
         ragged_row_line_numbers,
         coercion_failures,
         warnings,
+        source: SourceFormat::Text,
     };
 
     Ok(ParsedTable { columns, report })

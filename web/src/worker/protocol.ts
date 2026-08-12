@@ -51,7 +51,7 @@ export interface SegmentationInput {
 }
 
 export type WorkerRequest =
-  | { type: "parseFile"; datasetId: string; bytes: ArrayBuffer; overrides: ParseOverrides }
+  | { type: "parseFile"; datasetId: string; bytes: ArrayBuffer; overrides: ParseOverrides; format: "text" | "mdf4" }
   | { type: "reparse"; datasetId: string; overrides: ParseOverrides }
   | { type: "getPage"; datasetId: string; requestId: string; offset: number; limit: number }
   | { type: "getColumnStats"; datasetId: string; requestId: string; column: string }

@@ -61,7 +61,10 @@ and `k` series against state of charge, and computing their derivatives.
 A generic, instrument-agnostic delimited-text parser reads the file:
 detects encoding, delimiter, decimal separator, an optional preamble,
 and an optional header row, then classifies each column as numeric or
-text. See [What files parse correctly](#what-files-parse-correctly-and-what-may-not).
+text. `.mf4` files instead go through a dedicated MDF4 binary reader that
+decodes every channel group into the same column table, so everything
+downstream (mapping, segmentation, fitting) is unaware of which importer
+ran. See [What files parse correctly](#what-files-parse-correctly-and-what-may-not).
 
 ### 2. Column mapping
 
@@ -87,6 +90,18 @@ periods**, each carrying the active run that preceded it.
 charge/discharge half-cycle — at the start (default, matching the
 original R implementation) or the end. This is a display/fitting
 reference choice, not a physical assumption.
+
+**ICI cycle detection** (on by default; tuned in the Stage A panel)
+additionally excludes rests that aren't part of the actual ICI cycle
+*before* Q anchoring or fitting ever sees them: a rest longer than a
+configurable duration (default 5 minutes — e.g. an OCV rest between
+cycles) is dropped outright, and any run of fewer than a configurable
+number of consecutive short rests within one cycle number (default 20 —
+e.g. a DCIR leg's own handful of rests) is dropped as a group. This
+keeps a heterogeneous file's non-ICI sections from corrupting Q
+anchoring for the real interruptions nearby, or cluttering the
+regression diagnostic. Excluded rows aren't hidden — they're shaded red
+on Plot 1, and the count dropped is reported in the run log.
 
 ### 4. Stage A — resistance fitting
 
@@ -158,6 +173,10 @@ view to that exact rest.
 ---
 
 ## The user interface
+
+A theme toggle (top right) cycles system → light → dark. All plots
+(axes, gridlines, fit lines, shading) re-theme live, not just the
+surrounding UI chrome.
 
 **Left column** (configuration, top to bottom): Import → Parse card →
 Column mapping → Regression window (+ optimal-window estimator) → Stage
@@ -233,13 +252,14 @@ These reshape *what's shown*, never the underlying fit or export data:
 
 ## What files parse correctly (and what may not)
 
-The parser is deliberately **generic and instrument-agnostic** — there
-are no per-vendor code paths, and it never reads or displays instrument
-metadata. It expects: an optional preamble of any length, followed by an
-optional single header row, followed by delimited numeric data. That
-contract works well for typical cycler exports (e.g. Bio-Logic EC-Lab
-`.mpt`/`.txt` files, and similar plain-text exports from other cyclers),
-but it has real, specific limits:
+The text parser is deliberately **generic and instrument-agnostic** —
+there are no per-vendor code paths, and it never reads or displays
+instrument metadata. It expects: an optional preamble of any length,
+followed by an optional single header row, followed by delimited numeric
+data. That contract works well for typical cycler exports (e.g.
+Bio-Logic EC-Lab `.mpt`/`.txt` files, and similar plain-text exports from
+other cyclers), but it has real, specific limits. `.mf4` files skip this
+parser entirely — see the MDF4 bullet below.
 
 **Will parse correctly:**
 - Tab-, comma-, semicolon-, or pipe-delimited text (`.txt`, `.csv`,
@@ -260,6 +280,17 @@ but it has real, specific limits:
   with a reported line number, not fatal to the whole file.
 - Files up to 250 MB (a warning appears above 100 MB that parsing may
   take a moment, but it still proceeds).
+- **MDF4 (`.mf4`) files** — detected by extension and routed to a
+  dedicated binary reader instead of the text parser above, including
+  files using MDF4's compressed (`##DZ`/zlib, optionally
+  transpose-encoded) or history-list (`##HL`) storage. Every channel
+  group is decoded and merged into one table, matched against the group
+  with the most samples by row count and by its master (time) channel's
+  first/last timestamps; a group that doesn't line up is left out of the
+  table, with a warning naming it, rather than silently misaligned. The
+  Parse card hides the encoding/delimiter/decimal-separator/header
+  overrides for these files, since none of them apply to a binary
+  source.
 
 **May not parse correctly, or need a manual override:**
 - **Fixed-width or space-delimited files** — not supported; only the
@@ -282,9 +313,9 @@ but it has real, specific limits:
   as grouping columns, but can't be mapped to time/current/voltage/etc.
 - **Multi-sheet spreadsheets, `.xlsx`/`.xls` binary formats, or JSON/XML
   exports** — out of scope; export to plain delimited text first.
-- **Proprietary/binary cycler formats** (e.g. a raw `.mpr` rather than
-  the plain-text `.mpt` export) — export the plain-text version from your
-  cycler's software first.
+- **Proprietary/binary cycler formats other than MDF4** (e.g. a raw
+  `.mpr` rather than the plain-text `.mpt` export) — export the
+  plain-text version from your cycler's software first.
 - Whatever the parser does decide, it's always visible and correctable:
   the **Parse card** shows every sniffer decision and lets you override
   encoding, delimiter, decimal separator, lines-to-skip, and
@@ -322,10 +353,17 @@ analysis pipeline does; it only ever sees "someone loaded the page."
 ## Development
 
 ```
-core/     Rust: parsing, segmentation, regression, spline smoothing, derivatives
+core/     Rust: parsing (text + MDF4), segmentation, regression, spline smoothing, derivatives
 wasm/     Thin wasm-bindgen shim over core, used by the Web Worker
 web/      Vite + TypeScript front end
 ```
+
+`core/src/mf4/` is a trimmed, in-place-patched subset of the
+[`mf4-rs`](https://github.com/dmagyar-0/mf4-rs) crate (MIT, see
+`core/src/mf4/ATTRIBUTION.md`), vendored rather than depended on so it
+could gain `##HL`/`##DZ` compressed-block support the upstream crate
+lacks — see that directory's own module doc comment for the full
+rationale.
 
 ```bash
 # Rust test suite (includes golden-file validation against the R reference)

@@ -2,7 +2,7 @@
 // its WASM-side `ParsedDataset` for the life of the session; only small
 // JSON summaries ever cross back to the main thread.
 
-import init, { parse_file, type ParsedDataset } from "../wasm/pkg/ici_wasm.js";
+import init, { parse_file, parse_mf4_file, type ParsedDataset } from "../wasm/pkg/ici_wasm.js";
 import type { OptimalWindowResult, ParseErrorInfo, ParseOverrides } from "../types";
 import type { WorkerRequest, WorkerResponse } from "./protocol";
 
@@ -17,6 +17,8 @@ interface DatasetEntry {
   parsed: ParsedDataset | null;
   /** §12.3 provenance: computed once from the original bytes at `parseFile` time, reused (not recomputed) across `reparse` calls -- reparse operates on the same bytes with different sniffer overrides. */
   sha256: string;
+  /** Which wasm entry point owns these bytes -- an MDF4 file has no sniffer overrides to reparse with, so `runParse` ignores `overrides` and calls `parse_mf4_file` instead when this is `"mdf4"`. */
+  format: "text" | "mdf4";
 }
 
 async function sha256Hex(bytes: Uint8Array): Promise<string> {
@@ -63,7 +65,7 @@ function runParse(datasetId: string, bytes: Uint8Array, overrides: ParseOverride
   if (!entry) return;
 
   try {
-    const parsed = parse_file(bytes, JSON.stringify(overrides));
+    const parsed = entry.format === "mdf4" ? parse_mf4_file(bytes) : parse_file(bytes, JSON.stringify(overrides));
     entry.parsed?.free();
     entry.parsed = parsed;
     post({
@@ -88,7 +90,7 @@ self.onmessage = async (ev: MessageEvent<WorkerRequest>) => {
       const bytes = new Uint8Array(msg.bytes);
       datasets.get(msg.datasetId)?.parsed?.free();
       const sha256 = await sha256Hex(bytes);
-      datasets.set(msg.datasetId, { bytes, parsed: null, sha256 });
+      datasets.set(msg.datasetId, { bytes, parsed: null, sha256, format: msg.format });
       runParse(msg.datasetId, bytes, msg.overrides);
       break;
     }

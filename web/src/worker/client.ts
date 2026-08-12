@@ -72,10 +72,10 @@ export class DataWorkerClient {
     this.worker.postMessage(msg, transfer);
   }
 
-  parseFile(datasetId: string, bytes: ArrayBuffer, overrides: ParseOverrides): Promise<ParseOutcome> {
+  parseFile(datasetId: string, bytes: ArrayBuffer, overrides: ParseOverrides, format: "text" | "mdf4" = "text"): Promise<ParseOutcome> {
     return new Promise((resolve) => {
       this.parseWaiters.set(datasetId, resolve);
-      this.send({ type: "parseFile", datasetId, bytes, overrides }, [bytes]);
+      this.send({ type: "parseFile", datasetId, bytes, overrides, format }, [bytes]);
     });
   }
 

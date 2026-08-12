@@ -143,7 +143,8 @@ async function handleFile(file: File, worker: DataWorkerClient): Promise<void> {
 
   const bytes = await file.arrayBuffer();
   const startedAt = performance.now();
-  const outcome = await worker.parseFile(id, bytes, {});
+  const format = file.name.toLowerCase().endsWith(".mf4") ? "mdf4" : "text";
+  const outcome = await worker.parseFile(id, bytes, {}, format);
 
   if (!outcome.ok) {
     store.set((s) => ({
