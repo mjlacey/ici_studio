@@ -50,3 +50,30 @@ export function buildPocvTsv(dataset: Dataset, groupKey: string): string {
   const lines = ["Q\tE", ...rows.map((r) => `${r.q}\t${r.e}`)];
   return lines.join("\n") + "\n";
 }
+
+/**
+ * `Q\tE\tR\tk` (`E`/`R`/`k` = that group's smoothed E0/R/k), sorted by
+ * ascending `Q`, one selected half-cycle only. A row missing any of the
+ * three smoothed values (rare -- each smoother fits independently, see
+ * `runStageB` in wasm/src/lib.rs) is skipped rather than emitted with a
+ * gap, same "finite or not present at all" rule as `buildPocvTsv`.
+ */
+export function buildPocvRkTsv(dataset: Dataset, groupKey: string): string {
+  const table = dataset.stageAResult?.analysisTable;
+  const stageB = dataset.stageBResult;
+  if (!table || !stageB) return "";
+
+  const rows: { q: number; e: number; r: number; k: number }[] = [];
+  for (let i = 0; i < stageB.rowGroupKey.length; i++) {
+    if (stageB.rowGroupKey[i] !== groupKey) continue;
+    const e = stageB.e0Smooth[i];
+    const r = stageB.rSmooth[i];
+    const k = stageB.kSmooth[i];
+    if (e === null || r === null || k === null) continue;
+    rows.push({ q: table.q[i], e, r, k });
+  }
+  rows.sort((a, b) => a.q - b.q);
+
+  const lines = ["Q\tE\tR\tk", ...rows.map((row) => `${row.q}\t${row.e}\t${row.r}\t${row.k}`)];
+  return lines.join("\n") + "\n";
+}

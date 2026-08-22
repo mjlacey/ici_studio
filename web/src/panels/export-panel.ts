@@ -5,7 +5,7 @@
 
 import { applyConfigImport, buildConfigExport } from "../export/config";
 import { downloadJson, downloadText } from "../export/download";
-import { buildPocvTsv, pocvGroupOptions } from "../export/pocv";
+import { buildPocvRkTsv, buildPocvTsv, pocvGroupOptions } from "../export/pocv";
 import { buildRunReport } from "../export/run-report";
 import { buildAnalysisTsv, defaultTsvOptions, type TsvOptions } from "../export/tsv";
 import { activeDataset, store, updateDataset } from "../state";
@@ -102,12 +102,13 @@ function renderPanel(container: HTMLElement, dataset: Dataset, worker: DataWorke
           </tbody>
         </table>
         <button type="button" class="btn-small" id="download-pocv" ${pocvOptions.length ? "" : "disabled"}>Export charge/discharge pOCV</button>
+        <button type="button" class="btn-small" id="download-pocv-rk" ${pocvOptions.length ? "" : "disabled"}>Export charge/discharge pOCV + R + k</button>
         ${
           !dataset.stageBResult
             ? `<p class="hint">Run Stage B ("Smooth &amp; derive") first.</p>`
             : pocvOptions.length === 0
               ? `<p class="hint">No smoothed points available to export.</p>`
-              : `<p class="hint">Two columns only — Q and the smoothed E0 curve, renamed "E" — for the selected half-cycle only, for direct import into external pOCV tooling.</p>`
+              : `<p class="hint">Q and the smoothed E0 curve, renamed "E" (optionally with smoothed R and k, renamed "R"/"k") — for the selected half-cycle only, for direct import into external pOCV tooling.</p>`
         }
       </details>
 
@@ -156,6 +157,12 @@ function renderPanel(container: HTMLElement, dataset: Dataset, worker: DataWorke
     const tsv = buildPocvTsv(dataset, pocvGroupKey);
     const label = pocvOptions.find((o) => o.key === pocvGroupKey)?.label ?? "export";
     downloadText(tsv, `${dataset.filename}_pOCV_${sanitizeFilenamePart(label)}.txt`, "text/tab-separated-values;charset=utf-8");
+  });
+  container.querySelector<HTMLButtonElement>("#download-pocv-rk")?.addEventListener("click", () => {
+    if (!pocvGroupKey) return;
+    const tsv = buildPocvRkTsv(dataset, pocvGroupKey);
+    const label = pocvOptions.find((o) => o.key === pocvGroupKey)?.label ?? "export";
+    downloadText(tsv, `${dataset.filename}_pOCV_R_k_${sanitizeFilenamePart(label)}.txt`, "text/tab-separated-values;charset=utf-8");
   });
 }
 
