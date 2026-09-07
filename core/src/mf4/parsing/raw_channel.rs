@@ -1,5 +1,7 @@
 use crate::mf4::blocks::channel_block::ChannelBlock;
+use crate::mf4::blocks::compressed_data_block::read_dz_block;
 use crate::mf4::blocks::data_list_block::DataListBlock;
+use crate::mf4::blocks::history_list_block::HistoryListBlock;
 use crate::mf4::blocks::signal_data_block::SignalDataBlock;
 use crate::mf4::blocks::common::BlockParse;
 use crate::mf4::parsing::raw_channel_group::RawChannelGroup;
@@ -40,21 +42,25 @@ impl<'a> RawChannel {
             let mut next_addr = self.block.data;
             let mut data_links = Vec::new();
             let mut link_idx = 0;
-            let mut current_sdb: Option<SignalDataBlock> = None;
-            let mut sdb_pos = 0;
+            // Owned rather than borrowed: a ##DZ fragment's inflated bytes
+            // don't exist anywhere in the file to borrow from, so a fragment
+            // that happens to be compressed needs the same owned buffer a
+            // plain ##SD fragment gets -- see DataBlock's own doc comment for
+            // why the rest of this module made the same call.
+            let mut current_buf: Option<Vec<u8>> = None;
+            let mut buf_pos = 0;
             let mut visited_dl: std::collections::HashSet<u64> = std::collections::HashSet::new();
 
             // Build a from_fn iterator carrying that mutable state
             let vlsd_iter = std::iter::from_fn(move || -> Option<Result<Vec<u8>, MdfError>> {
                 loop {
-                    // 1) Yield from an open SDBLOCK if any
-                    if let Some(sdb) = &current_sdb {
-                        let buf = sdb.data;
-                        if sdb_pos + 4 <= buf.len() {
+                    // 1) Yield from an open SD buffer if any
+                    if let Some(buf) = &current_buf {
+                        if buf_pos + 4 <= buf.len() {
                             let len = u32::from_le_bytes(
-                                buf[sdb_pos..sdb_pos+4].try_into().unwrap()
+                                buf[buf_pos..buf_pos+4].try_into().unwrap()
                             ) as usize;
-                            let start = sdb_pos + 4;
+                            let start = buf_pos + 4;
                             let end = start + len;
                             if end > buf.len() {
                                 return Some(Err(MdfError::TooShortBuffer {
@@ -65,11 +71,12 @@ impl<'a> RawChannel {
                                 }));
                             }
                             let slice = &buf[start..end];
-                            sdb_pos = end;
-                            return Some(Ok(slice.to_vec()));
+                            let value = slice.to_vec();
+                            buf_pos = end;
+                            return Some(Ok(value));
                         }
                         // exhausted
-                        current_sdb = None;
+                        current_buf = None;
                     }
 
                     // 2) Next link in current DL batch?
@@ -80,22 +87,29 @@ impl<'a> RawChannel {
                             continue; // null link
                         }
                         let off = frag_addr as usize;
-                        if off >= bytes.len() {
-                            return Some(Err(MdfError::TooShortBuffer {
-                                actual:   bytes.len(),
-                                expected: off.saturating_add(24),
-                                file:     file!(),
-                                line:     line!(),
-                            }));
-                        }
-                        match SignalDataBlock::from_bytes(&bytes[off..]) {
-                            Ok(sdb) => {
+                        let frag_id = match bytes.get(off..off.saturating_add(4)) {
+                            Some(id) => id,
+                            None => {
+                                return Some(Err(MdfError::TooShortBuffer {
+                                    actual:   bytes.len(),
+                                    expected: off.saturating_add(4),
+                                    file:     file!(),
+                                    line:     line!(),
+                                }));
+                            }
+                        };
+                        let parsed = match frag_id {
+                            b"##DZ" => read_dz_block(&bytes[off..]).map(|db| db.data),
+                            _ => SignalDataBlock::from_bytes(&bytes[off..]).map(|sdb| sdb.data.to_vec()),
+                        };
+                        match parsed {
+                            Ok(data) => {
                                 // Prepare to yield from it on the next loop
-                                current_sdb = Some(sdb);
-                                sdb_pos = 0;
+                                current_buf = Some(data);
+                                buf_pos = 0;
                                 continue;
                             }
-                            Err(e) => return Some(Err(e.into())),
+                            Err(e) => return Some(Err(e)),
                         }
                     }
 
@@ -123,6 +137,21 @@ impl<'a> RawChannel {
                             }
                         };
                         match id {
+                            b"##HL" => {
+                                // History-list wrapper (present when the DL
+                                // chain it wraps has ##DZ-compressed
+                                // fragments): resolve straight through to the
+                                // ##DL it points at and keep walking from
+                                // there -- same as raw_data_group.rs's own
+                                // ##HL handling for a channel group's data.
+                                match HistoryListBlock::from_bytes(&bytes[off..]) {
+                                    Ok(hl) => {
+                                        next_addr = hl.dl_first;
+                                        continue;
+                                    }
+                                    Err(e) => return Some(Err(e)),
+                                }
+                            }
                             b"##DL" => {
                                 // Data List Block
                                 match DataListBlock::from_bytes(&bytes[off..]) {
@@ -139,8 +168,20 @@ impl<'a> RawChannel {
                                 // Direct Signal Data Block
                                 match SignalDataBlock::from_bytes(&bytes[off..]) {
                                     Ok(sdb) => {
-                                        current_sdb = Some(sdb);
-                                        sdb_pos = 0;
+                                        current_buf = Some(sdb.data.to_vec());
+                                        buf_pos = 0;
+                                        next_addr = 0; // no list chain
+                                        continue;
+                                    }
+                                    Err(e) => return Some(Err(e)),
+                                }
+                            }
+                            b"##DZ" => {
+                                // Direct compressed Signal Data Block (no ##DL list).
+                                match read_dz_block(&bytes[off..]) {
+                                    Ok(db) => {
+                                        current_buf = Some(db.data);
+                                        buf_pos = 0;
                                         next_addr = 0; // no list chain
                                         continue;
                                     }
@@ -151,7 +192,7 @@ impl<'a> RawChannel {
                                 // unexpected block type
                                 return Some(Err(MdfError::BlockIDError {
                                     actual:   String::from_utf8_lossy(other).into(),
-                                    expected: "##DL or ##SD".to_string(),
+                                    expected: "##HL / ##DL / ##SD / ##DZ".to_string(),
                                 }));
                             }
                         }
